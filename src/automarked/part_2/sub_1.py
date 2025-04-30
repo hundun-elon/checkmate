@@ -17,7 +17,8 @@ rbc_moves.append('0000')
 # Add all legal castling moves specific to RBC
 for move in reconchess.utilities.without_opponent_pieces(board).generate_castling_moves():
     if not reconchess.utilities.is_illegal_castle(board, move):
-        rbc_moves.append(str(move))
+        if str(move) not in rbc_moves:
+            rbc_moves.append(str(move))
 
 # Sort the move list alphabetically
 rbc_moves = sorted(rbc_moves)
