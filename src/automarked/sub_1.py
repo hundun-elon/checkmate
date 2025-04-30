@@ -1,7 +1,7 @@
 import chess
 
-fen = input()
+fen = input() # Get current board state in FEN
 
-board = chess.Board(fen=fen)
+board = chess.Board(fen=fen) # Create a chess board object using the FEN string
 
-print(board)
+print(board) # Print visualisation of board
