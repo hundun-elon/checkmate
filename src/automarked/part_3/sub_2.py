@@ -50,7 +50,7 @@ stockfish_path = os.path.join(current_dir, 'stockfish.exe')
 
 # Make sure the file exists
 if not os.path.exists(stockfish_path):
-    print(f"Error: Stockfish executable not found at {stockfish_path}")
+#     print(f"Error: Stockfish executable not found at {stockfish_path}")
     # Try alternative paths
     if platform.system() == 'Windows':
         stockfish_path = './stockfish.exe'  # Local Windows path
@@ -58,11 +58,11 @@ if not os.path.exists(stockfish_path):
         # Try the current directory without path manipulation
         stockfish_path = './stockfish.exe'
         if not os.path.exists(stockfish_path):
-            print(f"Error: Stockfish not found at {stockfish_path} either")
-            print("Please ensure stockfish is in the current directory")
+            # print(f"Error: Stockfish not found at {stockfish_path} either")
+            # print("Please ensure stockfish is in the current directory")
             exit(1)
 
-print(f"Using Stockfish at: {stockfish_path}")
+# print(f"Using Stockfish at: {stockfish_path}")
 
 try:
     # Open the engine
