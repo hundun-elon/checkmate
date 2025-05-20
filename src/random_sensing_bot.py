@@ -103,7 +103,7 @@ class RandomSensingBot(Player):
             print(f"[DEBUG] Limited boards to 10 000: {before} -> {after}")
 
         print(f"[DEBUG] Boards expanded after opponent move: {len(self.boards)} -> {len(new_boards)}")
-
+        
         # update the internal board states
         self.boards = new_boards
 
@@ -124,8 +124,14 @@ class RandomSensingBot(Player):
     def handle_sense_result(self, sense_result: List[Tuple[Square, Optional[chess.Piece]]]):
         # filter possible board states based on the sense result
         before = len(self.boards)
+        new_boards = self._filter_boards_by_sense_result(sense_result)
+        after = len(new_boards)
+
+        if len(new_boards) == 0:
+            print(f"[DEBUG] Boards collapsed to 0, keeping original boards")
+            return
+        
         self.boards = self._filter_boards_by_sense_result(sense_result)       
-        after = len(self.boards)
         print(f"[DEBUG] Filtered boards by sense: {before} -> {after}.")
 
     def choose_move(self, move_actions: List[chess.Move], seconds_left: float) -> Optional[chess.Move]:
@@ -179,9 +185,16 @@ class RandomSensingBot(Player):
     def handle_move_result(self, requested_move: Optional[chess.Move], taken_move: Optional[chess.Move], captured_opponent_piece: bool, capture_square: Optional[Square]):
         # update possible board states based on the outcome of the move, if the move was taken
         print(f"[DEBUG] Move result. Requested: {requested_move}, Taken: {taken_move}, Captured: {captured_opponent_piece}, Capture square: {capture_square}")
+        
         before = len(self.boards)
-        self.boards = self._filter_boards_by_own_move_result(requested_move, taken_move)
-        after = len(self.boards)
+        new_boards = self._filter_boards_by_own_move_result(requested_move, taken_move)
+        after = len(new_boards)
+
+        if len(new_boards) == 0:
+            print(f"[DEBUG] Boards collapsed to 0, keeping original boards")
+            return
+
+        self.boards = new_boards
         print(f"[DEBUG] Filtered boards by own move result: {before} -> {after}")
 
     def handle_game_end(self, winner_color: Optional[Color], win_reason: Optional[WinReason], game_history: GameHistory):
