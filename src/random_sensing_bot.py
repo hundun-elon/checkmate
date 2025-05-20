@@ -36,27 +36,64 @@ class RandomSensingBot(Player):
         # set to store updated board positions after simulating opponent moves
         new_boards = set()
 
-        # case 1: piece was captured
-        # find all moves that result in a capture move at the capture square - this includes rbc modified moves
-        # generate new boards from those moves
+        # case 1: our piece was captured
+        # find all opponent moves that result in a capture at the capture square and generate new boards from those moves
         if captured_my_piece:
             for board_str in self.boards:
                 board = chess.Board(board_str)
                 board.turn = not self.color  # simulate opponent move
 
                 for move in self._generate_rbc_legal_moves(board):
+                    # get the capture square of the move
+                    move_capture_square = reconchess.utilities.capture_square_of_move(board, move)
+                    
+                    # check if this move captures at the specified capture square
+                    if move_capture_square == capture_square:
+                        # create a new board with this move applied
+                        new_board = board.copy()
+                        try:
+                            # first try the standard chess push
+                            new_board.push(move)
+                        except chess.IllegalMoveError:
+                            # revise move to make it compatible 
+                            revised_move = reconchess.utilities.revise_move(new_board, move)
+                            if revised_move:
+                                new_board.push(revised_move)
+                            else:
+                                # skip this move if it can't be revised
+                                continue
+                        
+                        new_board.turn = self.color
+                        new_boards.add(new_board.fen())
                     
         # case 2: no piece was captured
-        # find all moves that result in no capture
-        # generate new boards from those moves
+        # find all moves that result in no capture and generate new boards from those moves
         else:
             for board_str in self.boards:
                 board = chess.Board(board_str)
                 board.turn = not self.color  # simulate opponent move
 
                 for move in self._generate_rbc_legal_moves(board):
+                    # check if this move doesn't capture any piece
+                    move_capture_square = reconchess.utilities.capture_square_of_move(board, move)
                     
-
+                    if move_capture_square is None:
+                        # create a new board with this move applied
+                        new_board = board.copy()
+                        try:
+                            # first try the standard chess push
+                            new_board.push(move)
+                        except chess.IllegalMoveError:
+                            # revise move to make it compatible
+                            revised_move = reconchess.utilities.revise_move(new_board, move)
+                            if revised_move:
+                                new_board.push(revised_move)
+                            else:
+                                # skip this move if it can't be revised
+                                continue
+                        
+                        new_board.turn = self.color
+                        new_boards.add(new_board.fen())
 
         # limit the number of board states to 10,000 for performance reasons
         if len(new_boards) > 10000:
@@ -87,7 +124,7 @@ class RandomSensingBot(Player):
     def handle_sense_result(self, sense_result: List[Tuple[Square, Optional[chess.Piece]]]):
         # filter possible board states based on the sense result
         before = len(self.boards)
-        self.boards = self._filter_boards_by_sense_result(sense_result)
+        self.boards = self._filter_boards_by_sense_result(sense_result)       
         after = len(self.boards)
         print(f"[DEBUG] Filtered boards by sense: {before} -> {after}.")
 
@@ -154,11 +191,12 @@ class RandomSensingBot(Player):
         except chess.engine.EngineTerminatedError:
             pass
 
-    # ==== Helpers ====
+    # ==== helpers ====
 
     def _generate_rbc_legal_moves(self, board: chess.Board) -> List[chess.Move]:
         moves = list(board.pseudo_legal_moves)
         moves.append(chess.Move.null())
+        # add castling moves
         for move in reconchess.utilities.without_opponent_pieces(board).generate_castling_moves():
             if not reconchess.utilities.is_illegal_castle(board, move):
                 moves.append(move)
@@ -176,112 +214,97 @@ class RandomSensingBot(Player):
                     break
             if match:
                 filtered.add(board_str)
+
         return filtered
 
-    def _is_rbc_modified_move(self, board: chess.Board, requested: Optional[chess.Move], taken: Optional[chess.Move]) -> bool:
-        if requested is None or taken is None:
-            return False
-
-        piece = board.piece_at(requested.from_square)
-        if piece is None:
-            return False
-
-        # 1) Sliding piece modification (queen, rook, bishop)
-        if piece.piece_type in [chess.ROOK, chess.BISHOP, chess.QUEEN]:
-            if requested.from_square != taken.from_square:
-                return False
-
-            dx = chess.square_file(requested.to_square) - chess.square_file(requested.from_square)
-            dy = chess.square_rank(requested.to_square) - chess.square_rank(requested.from_square)
-
-            step_file = (dx > 0) - (dx < 0)
-            step_rank = (dy > 0) - (dy < 0)
-
-            file = chess.square_file(requested.from_square)
-            rank = chess.square_rank(requested.from_square)
-
-            while True:
-                file += step_file
-                rank += step_rank
-                if not (0 <= file < 8 and 0 <= rank < 8):
-                    break
-                current = chess.square(file, rank)
-                blocker = board.piece_at(current)
-                if blocker:
-                    # Check if first blocker is opponent piece and matches taken.to_square
-                    if blocker.color != board.turn and current == taken.to_square:
-                        return True
-                    break
-                if current == requested.to_square:
-                    break
-            return False
-
-        # 2) Pawn double-step fallback
-        elif piece.piece_type == chess.PAWN:
-            # Pawn double move requested?
-            start_rank = 1 if piece.color == chess.WHITE else 6
-            from_rank = chess.square_rank(requested.from_square)
-            to_rank = chess.square_rank(requested.to_square)
-            if from_rank == start_rank and abs(to_rank - from_rank) == 2:
-                # If requested is two-step, taken might be one-step forward
-                one_step_rank = from_rank + (1 if piece.color == chess.WHITE else -1)
-                one_step_sq = chess.square(chess.square_file(requested.from_square), one_step_rank)
-                if taken.from_square == requested.from_square and taken.to_square == one_step_sq:
-                    # Check that one-step move is legal (no opponent piece blocking)
-                    temp_board = board.copy()
-                    try:
-                        temp_board.push(taken)
-                        return True
-                    except:
-                        pass
-            return False
-
-        return False
+    def _moves_equivalent_ignoring_promotion(self, m1, m2):
+        return (
+            m1.from_square == m2.from_square and
+            m1.to_square == m2.to_square and
+            (
+                m1.promotion == m2.promotion or
+                (m1.promotion is None or m2.promotion is None)
+            )
+        )
 
     def _filter_boards_by_own_move_result(self, requested: Optional[chess.Move], taken: Optional[chess.Move]) -> Set[str]:
         filtered = set()
 
-        # --- Case 1 ---
-        # No move was taken => requested move must have been illegal
+        # --- case 1 ---
+        # no move was taken => requested move must have been illegal
         # keep the boards where the requested move is illegal
         if taken is None:
             for board_str in self.boards:
                 board = chess.Board(board_str)
-                rbc_legal_moves = self._generate_rbc_legal_moves(board)
-                if requested not in rbc_legal_moves:
+                # check if the move is legal in RBC
+                is_move_legal = False
+                for move in self._generate_rbc_legal_moves(board):
+                    if move == requested:
+                        is_move_legal = True
+                        # try to push the move to catch any legality issues
+                        try:
+                            revised_move = reconchess.utilities.revise_move(board, move)
+                            if revised_move:
+                                test_board = board.copy()
+                                test_board.push(revised_move)
+                            else:
+                                is_move_legal = False
+                        except chess.IllegalMoveError:
+                            is_move_legal = False
+                        break
+                        
+                if not is_move_legal:
                     filtered.add(board_str)
 
             return filtered
 
-        # --- Case 2 ---
-        # A move was taken, but it wasn't the move that was requested => move was modified
-        # keep the boards where the requested move is legal and taken move was modified
+        # --- case 2 ---
+        # a move was taken, but it wasn't the move that was requested => move was revised
+        # keep the boards where the requested move is legal and taken move was revised
         if requested != taken:
-            print("[DEBUG] Requested move was modified.")
+            print("[DEBUG] Requested move was revised.")
             for board_str in self.boards:
                 board = chess.Board(board_str)
-                rbc_legal_moves = self._generate_rbc_legal_moves(board)
-                move_was_modified = self._is_rbc_modified_move(board, requested, taken)
-                if requested in rbc_legal_moves and move_was_modified:
-                    filtered.add(board_str)
+                # use reconchess utilities to check if the move would be revised in this board state
+                revised_move = reconchess.utilities.revise_move(board, requested)
+                
+                # check if the revised move matches the taken move
+
+                # also: if the requested move is a promotion, no promotion piece is specified,
+                # RBC assumes a queen promotion by default. As a result, the requested move
+                # and the actual move taken will differ.
+
+                if revised_move and self._moves_equivalent_ignoring_promotion(revised_move, taken):
+                    # create new board with the taken move
+                    try:
+                        new_board = board.copy()
+                        new_board.push(taken)
+                        filtered.add(new_board.fen())
+                    except chess.IllegalMoveError:
+                        # this shouldn't happen if the move was properly revised
+                        pass
 
             return filtered
 
-        # --- Case 3 ---
-        # Requested move was taken exactly => move was not modified
+        # --- case 3 ---
+        # requested move was taken exactly => move was not modified
         # keep the boards where requested move is legal and taken move was not modified
         if requested == taken:
             print("[DEBUG] Requested move succeeded.")
             for board_str in self.boards:
                 board = chess.Board(board_str)
-                rbc_legal_moves = self._generate_rbc_legal_moves(board)
-                move_was_modified = self._is_rbc_modified_move(board, requested, taken)
-                if requested in rbc_legal_moves and not move_was_modified:
-                    filtered.add(board_str)
+                # use reconchess utilities to check if the move would NOT be modified
+                revised_move = reconchess.utilities.revise_move(board, requested)
+                
+                # if the move would not be modified and matches the requested/taken move
+                if revised_move == requested:
+                    # create new board with the taken move
+                    try:
+                        new_board = board.copy()
+                        new_board.push(taken)
+                        filtered.add(new_board.fen())
+                    except chess.IllegalMoveError:
+                        # this shouldn't happen for a legal move
+                        pass
 
             return filtered
-        
-
-
-        
-
