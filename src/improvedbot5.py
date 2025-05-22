@@ -1,16 +1,20 @@
 import chess.engine
 import reconchess
 from reconchess import *
-import random
-from typing import Optional, List, Tuple, Set
+import random, math
+from typing import Optional, List, Tuple, Set, Dict
 from collections import Counter
 
-class RandomSensingBot(Player):
+class ImprovedBot5(Player):
     def __init__(self):
         # set of possible board states
         self.boards: Set[str] = set()
         self.color = None
         self.turn_num = None
+
+        self.recent_sense_history = []
+        self.sense_history_with_weight = {}
+
         #print("[DEBUG] Bot initialised")
 
         self.engine = chess.engine.SimpleEngine.popen_uci('./engines/stockfish', setpgrp=True)
@@ -27,7 +31,7 @@ class RandomSensingBot(Player):
 
     def handle_opponent_move_result(self, captured_my_piece: bool, capture_square: Optional[Square]):
         self.turn_num += 1
-        print(f"[DEBUG] Opponent move result. Captured: {captured_my_piece}, Square: {capture_square}")
+        #print(f"[DEBUG] Opponent move result. Captured: {captured_my_piece}, Square: {capture_square}")
 
         # skip this function if this is the first turn and we're playing as White
         if self.turn_num == 1 and self.color == chess.WHITE:
@@ -108,8 +112,72 @@ class RandomSensingBot(Player):
         self.boards = new_boards
 
     def choose_sense(self, sense_actions: List[Square], move_actions: List[chess.Move], seconds_left: float) -> Square:
-        # randomly select a sensing move from squares that are not on the edge of the board
-        SEARCH_SPOTS = [
+    
+        def square_entropy(square: Square) -> float:
+            """Compute Shannon entropy for a single square."""
+            piece_counts = Counter()
+            
+            for board_str in self.boards:
+                board = chess.Board(board_str)
+                piece = board.piece_at(square)
+                piece_counts[piece] += 1
+            
+            total = sum(piece_counts.values())
+            if total == 0:
+                return 0.0
+            
+            probs = [count / total for count in piece_counts.values()]
+            return -sum(p * math.log2(p) for p in probs if p > 0)
+        
+        def sense_window_entropy(center_square: Square) -> float:
+            """Compute entropy for entire 3x3 sensing window."""
+            center_rank, center_file = divmod(center_square, 8)
+            total_entropy = 0.0
+            squares_in_window = 0
+            
+            for dr in [-1, 0, 1]:
+                for df in [-1, 0, 1]:
+                    rank, file = center_rank + dr, center_file + df
+                    if 0 <= rank < 8 and 0 <= file < 8:
+                        square = rank * 8 + file
+                        total_entropy += square_entropy(square)
+                        squares_in_window += 1
+            
+            return total_entropy / squares_in_window if squares_in_window > 0 else 0.0
+                
+        def update_sense_history(self, square: Square):
+            """Track recently sensed squares with decay."""
+            
+            # Add current square with maximum weight
+            self.sense_history_with_weight[square] = 1.0
+            
+            # Decay weights of previous senses
+            for sq in list(self.sense_history_with_weight.keys()):
+                self.sense_history_with_weight[sq] *= 0.7
+                if self.sense_history_with_weight[sq] < 0.1:
+                    del self.sense_history_with_weight[sq]
+        
+        def compute_advanced_score(square: Square) -> float:
+            """Enhanced scoring with multiple factors."""
+            # Base entropy (but consider full window)
+            window_entropy = sense_window_entropy(square)
+            single_entropy = square_entropy(square)
+            entropy_score = 0.6 * window_entropy + 0.2 * single_entropy
+            
+            base_score = entropy_score
+            
+            # Penalize recently sensed squares with decay
+            if square in self.sense_history_with_weight:
+                penalty = self.sense_history_with_weight[square]
+                base_score *= (1.0 - 0.4 * penalty)
+            
+            # Bonus for squares that haven't been sensed recently
+            if square not in self.sense_history_with_weight:
+                base_score *= 1.1
+            
+            return base_score
+        
+        filtered_actions = [
             9, 10, 11, 12, 13, 14,
             17, 18, 19, 20, 21, 22,
             25, 26, 27, 28, 29, 30,
@@ -117,9 +185,33 @@ class RandomSensingBot(Player):
             41, 42, 43, 44, 45, 46,
             49, 50, 51, 52, 53, 54,
         ]
-        choice = random.choice(SEARCH_SPOTS)
-        #print(f"[DEBUG] Chose sense square: {choice} ({chess.square_name(choice)})")
-        return choice
+
+        # Adaptive strategy based on board hypothesis count
+        if len(self.boards) < 5:
+            # Very few hypotheses - focus on window entropy
+            best_square = max(filtered_actions, key=sense_window_entropy)
+        elif len(self.boards) < 20:
+            # Moderate hypotheses - balance entropy and strategy
+            best_square = max(filtered_actions, 
+                            key=lambda sq: 0.6 * square_entropy(sq) + 0.4 * compute_advanced_score(sq))
+        else:
+            # Many hypotheses - use full advanced scoring
+            best_square = max(filtered_actions, key=compute_advanced_score)
+        
+        # Update history
+        update_sense_history(self, best_square)
+        
+        # Enhanced debug information
+        # entropy_val = square_entropy(best_square)
+        # window_entropy_val = sense_window_entropy(best_square)
+        # advanced_score = compute_advanced_score(best_square)
+        
+        # print(f"[DEBUG] Chose sense square: {best_square} ({chess.square_name(best_square)})")
+        # print(f"[DEBUG] Single entropy: {entropy_val:.3f}, Window entropy: {window_entropy_val:.3f}")
+        # print(f"[DEBUG] Advanced score: {advanced_score:.3f}")
+        # print(f"[DEBUG] Board hypotheses: {len(self.boards)}, Time left: {seconds_left:.1f}s")
+        
+        return best_square
 
     def handle_sense_result(self, sense_result: List[Tuple[Square, Optional[chess.Piece]]]):
         # filter possible board states based on the sense result
@@ -174,7 +266,7 @@ class RandomSensingBot(Player):
             max_votes = best_moves[0][1]
             top_moves = sorted([m for m, v in best_moves if v == max_votes])
             chosen = top_moves[0]
-            print(f"[DEBUG] Selected move by vote: {chosen} with {max_votes} votes")
+            #print(f"[DEBUG] Selected move by vote: {chosen} with {max_votes} votes")
             return chess.Move.from_uci(chosen)
 
         # fallback: random legal move if nothing selected
@@ -183,7 +275,6 @@ class RandomSensingBot(Player):
         return fallback
 
     def handle_move_result(self, requested_move: Optional[chess.Move], taken_move: Optional[chess.Move], captured_opponent_piece: bool, capture_square: Optional[Square]):
-        # update possible board states based on the outcome of the move, if the move was taken
         #print(f"[DEBUG] Move result. Requested: {requested_move}, Taken: {taken_move}, Captured: {captured_opponent_piece}, Capture square: {capture_square}")
         
         before = len(self.boards)
@@ -191,11 +282,11 @@ class RandomSensingBot(Player):
         after = len(new_boards)
 
         if len(new_boards) == 0:
-            #print(f"[DEBUG] Boards collapsed to 0, keeping original boards")
+            #print("[DEBUG] Boards collapsed to 0, keeping original boards")
             return
 
         self.boards = new_boards
-        #print(f"[DEBUG] Filtered boards by own move result: {before} -> {after}")
+        #print(f"[DEBUG] Boards after own move result: {before} -> {after}")
 
     def handle_game_end(self, winner_color: Optional[Color], win_reason: Optional[WinReason], game_history: GameHistory):
         try:
@@ -204,12 +295,9 @@ class RandomSensingBot(Player):
         except chess.engine.EngineTerminatedError:
             pass
 
-    # ==== helpers ====
-
     def _generate_rbc_legal_moves(self, board: chess.Board) -> List[chess.Move]:
         moves = list(board.pseudo_legal_moves)
         moves.append(chess.Move.null())
-        # add castling moves
         for move in reconchess.utilities.without_opponent_pieces(board).generate_castling_moves():
             if not reconchess.utilities.is_illegal_castle(board, move):
                 moves.append(move)
@@ -219,15 +307,8 @@ class RandomSensingBot(Player):
         filtered = set()
         for board_str in self.boards:
             board = chess.Board(board_str)
-            match = True
-            for square, expected_piece in sense_result:
-                actual_piece = board.piece_at(square)
-                if actual_piece != expected_piece:
-                    match = False
-                    break
-            if match:
+            if all(board.piece_at(square) == piece for square, piece in sense_result):
                 filtered.add(board_str)
-
         return filtered
 
     def _moves_equivalent_ignoring_promotion(self, m1, m2):

@@ -1,20 +1,23 @@
 import chess.engine
 import reconchess
 from reconchess import *
-import random
-from typing import Optional, List, Tuple, Set
-from collections import Counter
+import random, math
+from typing import Optional, List, Tuple, Set, Dict
+from collections import Counter, defaultdict
 
-class RandomSensingBot(Player):
+class ImprovedBot(Player):
     def __init__(self):
         # set of possible board states
         self.boards: Set[str] = set()
         self.color = None
         self.turn_num = None
-        #print("[DEBUG] Bot initialised")
+
+        self.recent_sense_history = []
+
+        print("[DEBUG] Bot initialised")
 
         self.engine = chess.engine.SimpleEngine.popen_uci('./engines/stockfish', setpgrp=True)
-        #print("[DEBUG] Stockfish engine started")
+        print("[DEBUG] Stockfish engine started")
 
     def handle_game_start(self, color: Color, board: chess.Board, opponent_name: str):
         # add initial board state to set
@@ -100,26 +103,156 @@ class RandomSensingBot(Player):
             before = len(new_boards)
             new_boards = set(random.sample(list(new_boards), 10000))
             after = len(new_boards)
-            #print(f"[DEBUG] Limited boards to 10 000: {before} -> {after}")
+            print(f"[DEBUG] Limited boards to 10 000: {before} -> {after}")
 
-        #print(f"[DEBUG] Boards expanded after opponent move: {len(self.boards)} -> {len(new_boards)}")
+        print(f"[DEBUG] Boards expanded after opponent move: {len(self.boards)} -> {len(new_boards)}")
         
         # update the internal board states
         self.boards = new_boards
 
     def choose_sense(self, sense_actions: List[Square], move_actions: List[chess.Move], seconds_left: float) -> Square:
-        # randomly select a sensing move from squares that are not on the edge of the board
-        SEARCH_SPOTS = [
-            9, 10, 11, 12, 13, 14,
-            17, 18, 19, 20, 21, 22,
-            25, 26, 27, 28, 29, 30,
-            33, 34, 35, 36, 37, 38,
-            41, 42, 43, 44, 45, 46,
-            49, 50, 51, 52, 53, 54,
-        ]
-        choice = random.choice(SEARCH_SPOTS)
-        #print(f"[DEBUG] Chose sense square: {choice} ({chess.square_name(choice)})")
-        return choice
+
+        def square_entropy(square: Square) -> float:
+            piece_counts = Counter()
+            for board_str in self.boards:
+                board = chess.Board(board_str)
+                piece = board.piece_at(square)
+                piece_counts[piece] += 1
+            total = sum(piece_counts.values())
+            if total == 0:
+                return 0.0
+            probs = [count / total for count in piece_counts.values()]
+            return -sum(p * math.log2(p) for p in probs if p > 0)
+
+        def square_disagreement(square: Square) -> float:
+            seen = set()
+            for board_str in self.boards:
+                board = chess.Board(board_str)
+                seen.add(board.piece_at(square))
+            return len(seen) / len(self.boards)
+
+        def macro_entropy(center: Square) -> float:
+            total = 0.0
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    f = chess.square_file(center) + dx
+                    r = chess.square_rank(center) + dy
+                    if 0 <= f < 8 and 0 <= r < 8:
+                        sq = chess.square(f, r)
+                        total += square_entropy(sq)
+            return total
+
+        def macro_disagreement(center: Square) -> float:
+            total = 0.0
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    f = chess.square_file(center) + dx
+                    r = chess.square_rank(center) + dy
+                    if 0 <= f < 8 and 0 <= r < 8:
+                        sq = chess.square(f, r)
+                        total += square_disagreement(sq)
+            return total
+
+        def get_strategic_zones() -> Dict[str, Set[Square]]:
+            return {
+                'center': {chess.D4, chess.D5, chess.E4, chess.E5},
+                'extended_center': set(sum([
+                    [chess.square(f, r) for f in range(2, 6)] for r in range(2, 6)
+                ], [])),
+                'king_safety_white': {chess.F1, chess.G1, chess.H1, chess.F2, chess.G2, chess.H2},
+                'king_safety_black': {chess.F8, chess.G8, chess.H8, chess.F7, chess.G7, chess.H7},
+            }
+
+        def get_potential_moves_squares() -> Set[Square]:
+            move_squares = set()
+            for move in move_actions:
+                move_squares.add(move.to_square)
+                to_rank, to_file = divmod(move.to_square, 8)
+                for dr in [-1, 0, 1]:
+                    for df in [-1, 0, 1]:
+                        nr, nf = to_rank + dr, to_file + df
+                        if 0 <= nr < 8 and 0 <= nf < 8:
+                            move_squares.add(nr * 8 + nf)
+            return move_squares
+
+        def analyze_threat_potential(square: Square) -> float:
+            threat_score = 0.0
+            for board_str in self.boards:
+                board = chess.Board(board_str)
+                piece = board.piece_at(square)
+                if piece and piece.color != board.turn:
+                    piece_values = {
+                        chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
+                        chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0
+                    }
+                    threat_score += piece_values.get(piece.piece_type, 0)
+                    if piece.piece_type in [chess.QUEEN, chess.ROOK, chess.BISHOP]:
+                        threat_score += 2
+            return threat_score / len(self.boards)
+
+        def infer_game_phase() -> str:
+            avg_piece_count = sum(board_str.count('r') + board_str.count('n') +
+                                board_str.count('b') + board_str.count('q') +
+                                board_str.count('R') + board_str.count('N') +
+                                board_str.count('B') + board_str.count('Q')
+                                for board_str in self.boards) / len(self.boards)
+            if avg_piece_count > 8:
+                return 'opening'
+            elif avg_piece_count > 4:
+                return 'midgame'
+            else:
+                return 'endgame'
+
+        def update_sense_history(self, square: Square):
+            self.recent_sense_history.append(square)
+            if len(self.recent_sense_history) > 5:
+                self.recent_sense_history.pop(0)
+
+        def compute_weighted_score(center: Square) -> float:
+            zones = get_strategic_zones()
+            potential_moves = get_potential_moves_squares()
+            game_phase = infer_game_phase()
+
+            entropy_score = macro_entropy(center)
+            disagreement_score = macro_disagreement(center)
+
+            score = entropy_score * 0.6 + disagreement_score * 0.4
+
+            if center in zones['center']:
+                score *= 1.3 if game_phase != 'endgame' else 1.1
+            elif center in zones['extended_center']:
+                score *= 1.1
+
+            if center in potential_moves:
+                score *= 1.2
+            
+            # Bonus for threat potential
+            threat_score = analyze_threat_potential(center)
+            score += threat_score * 0.1
+
+            if self.color == chess.WHITE and center in zones['king_safety_white']:
+                score *= 1.15
+            elif self.color == chess.BLACK and center in zones['king_safety_black']:
+                score *= 1.15
+
+            if center in self.recent_sense_history[-3:]:
+                score *= 0.7
+
+            return score
+
+        # If early in game (low hypotheses), rely more on entropy
+        if len(self.boards) < 10:
+            best_square = max(sense_actions, key=macro_entropy)
+        else:
+            best_square = max(sense_actions, key=compute_weighted_score)
+
+        update_sense_history(self, best_square)
+
+        print(f"[DEBUG] Chose sense square: {best_square} ({chess.square_name(best_square)})")
+        print(f"[DEBUG] Macro Entropy: {macro_entropy(best_square):.3f}, Disagreement: {macro_disagreement(best_square):.3f}")
+        print(f"[DEBUG] Hypotheses: {len(self.boards)}, Game Phase: {infer_game_phase()}")
+
+        return best_square
 
     def handle_sense_result(self, sense_result: List[Tuple[Square, Optional[chess.Piece]]]):
         # filter possible board states based on the sense result
@@ -128,14 +261,14 @@ class RandomSensingBot(Player):
         after = len(new_boards)
 
         if len(new_boards) == 0:
-            #print(f"[DEBUG] Boards collapsed to 0, keeping original boards")
+            print(f"[DEBUG] Boards collapsed to 0, keeping original boards")
             return
         
         self.boards = self._filter_boards_by_sense_result(sense_result)       
-        #print(f"[DEBUG] Filtered boards by sense: {before} -> {after}.")
+        print(f"[DEBUG] Filtered boards by sense: {before} -> {after}.")
 
     def choose_move(self, move_actions: List[chess.Move], seconds_left: float) -> Optional[chess.Move]:
-        #print(f"[DEBUG] Choosing move. Boards: {len(self.boards)}, Move actions: {len(move_actions)}")
+        print(f"[DEBUG] Choosing move. Boards: {len(self.boards)}, Move actions: {len(move_actions)}")
 
         if not self.boards or not move_actions:
             return None
@@ -179,37 +312,33 @@ class RandomSensingBot(Player):
 
         # fallback: random legal move if nothing selected
         fallback = random.choice(move_actions)
-        #print(f"[DEBUG] Fallback random move: {fallback}")
+        print(f"[DEBUG] Fallback random move: {fallback}")
         return fallback
 
     def handle_move_result(self, requested_move: Optional[chess.Move], taken_move: Optional[chess.Move], captured_opponent_piece: bool, capture_square: Optional[Square]):
-        # update possible board states based on the outcome of the move, if the move was taken
-        #print(f"[DEBUG] Move result. Requested: {requested_move}, Taken: {taken_move}, Captured: {captured_opponent_piece}, Capture square: {capture_square}")
+        print(f"[DEBUG] Move result. Requested: {requested_move}, Taken: {taken_move}, Captured: {captured_opponent_piece}, Capture square: {capture_square}")
         
         before = len(self.boards)
         new_boards = self._filter_boards_by_own_move_result(requested_move, taken_move)
         after = len(new_boards)
 
         if len(new_boards) == 0:
-            #print(f"[DEBUG] Boards collapsed to 0, keeping original boards")
+            print("[DEBUG] Boards collapsed to 0, keeping original boards")
             return
 
         self.boards = new_boards
-        #print(f"[DEBUG] Filtered boards by own move result: {before} -> {after}")
+        print(f"[DEBUG] Boards after own move result: {before} -> {after}")
 
     def handle_game_end(self, winner_color: Optional[Color], win_reason: Optional[WinReason], game_history: GameHistory):
         try:
             self.engine.quit()
-            #print("[DEBUG] Engine shut down")
+            print("[DEBUG] Engine shut down")
         except chess.engine.EngineTerminatedError:
             pass
-
-    # ==== helpers ====
 
     def _generate_rbc_legal_moves(self, board: chess.Board) -> List[chess.Move]:
         moves = list(board.pseudo_legal_moves)
         moves.append(chess.Move.null())
-        # add castling moves
         for move in reconchess.utilities.without_opponent_pieces(board).generate_castling_moves():
             if not reconchess.utilities.is_illegal_castle(board, move):
                 moves.append(move)
@@ -219,15 +348,8 @@ class RandomSensingBot(Player):
         filtered = set()
         for board_str in self.boards:
             board = chess.Board(board_str)
-            match = True
-            for square, expected_piece in sense_result:
-                actual_piece = board.piece_at(square)
-                if actual_piece != expected_piece:
-                    match = False
-                    break
-            if match:
+            if all(board.piece_at(square) == piece for square, piece in sense_result):
                 filtered.add(board_str)
-
         return filtered
 
     def _moves_equivalent_ignoring_promotion(self, m1, m2):
@@ -275,7 +397,7 @@ class RandomSensingBot(Player):
         # a move was taken, but it wasn't the move that was requested => move was revised
         # keep the boards where the requested move is legal and taken move was revised
         if requested != taken:
-            #print("[DEBUG] Requested move was revised.")
+            print("[DEBUG] Requested move was revised.")
             for board_str in self.boards:
                 board = chess.Board(board_str)
                 # use reconchess utilities to check if the move would be revised in this board state
@@ -303,7 +425,7 @@ class RandomSensingBot(Player):
         # requested move was taken exactly => move was not modified
         # keep the boards where requested move is legal and taken move was not modified
         if requested == taken:
-            #print("[DEBUG] Requested move succeeded.")
+            print("[DEBUG] Requested move succeeded.")
             for board_str in self.boards:
                 board = chess.Board(board_str)
                 # use reconchess utilities to check if the move would NOT be modified

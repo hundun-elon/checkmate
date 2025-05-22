@@ -62,9 +62,11 @@ class TroutBot(Player):
             result = self.engine.play(self.board, chess.engine.Limit(time=0.5))
             return result.move
         except chess.engine.EngineTerminatedError:
-            print('Stockfish Engine died')
+            #print('Stockfish Engine died')
+            pass
         except chess.engine.EngineError:
-            print('Stockfish Engine bad state at "{}"'.format(self.board.fen()))
+            #print('Stockfish Engine bad state at "{}"'.format(self.board.fen()))
+            pass
 
         # if all else fails, pass
         return None
