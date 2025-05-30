@@ -3,9 +3,8 @@
 # List of all bots
 bots=(
   "./src/improvedbot.py"
-  "./src/improvedbot3.py"
-  "./src/improvedbot4.py"
-  "./src/improvedbot5.py"
+  "./src/improvedbot2.py"
+  #"./src/improvedbot3.py"
 )
 
 # Run each match in both directions (White vs Black and vice versa)

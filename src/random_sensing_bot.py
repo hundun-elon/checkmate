@@ -23,11 +23,11 @@ class RandomSensingBot(Player):
         self.turn_num = 0
 
         color_name = "White" if color else "Black"
-        print(f"[DEBUG] Game started. Color: {color_name}, Opponent: {opponent_name}")
+        # print(f"[DEBUG] Game started. Color: {color_name}, Opponent: {opponent_name}")
 
     def handle_opponent_move_result(self, captured_my_piece: bool, capture_square: Optional[Square]):
         self.turn_num += 1
-        print(f"[DEBUG] Opponent move result. Captured: {captured_my_piece}, Square: {capture_square}")
+        # print(f"[DEBUG] Opponent move result. Captured: {captured_my_piece}, Square: {capture_square}")
 
         # skip this function if this is the first turn and we're playing as White
         if self.turn_num == 1 and self.color == chess.WHITE:
@@ -174,7 +174,7 @@ class RandomSensingBot(Player):
             max_votes = best_moves[0][1]
             top_moves = sorted([m for m, v in best_moves if v == max_votes])
             chosen = top_moves[0]
-            print(f"[DEBUG] Selected move by vote: {chosen} with {max_votes} votes")
+            # print(f"[DEBUG] Selected move by vote: {chosen} with {max_votes} votes")
             return chess.Move.from_uci(chosen)
 
         # fallback: random legal move if nothing selected

@@ -26,7 +26,7 @@ class ImprovedBot(Player):
         self.turn_num = 0
 
         color_name = "White" if color else "Black"
-        print(f"[DEBUG] Game started. Color: {color_name}, Opponent: {opponent_name}")
+        #print(f"[DEBUG] Game started. Color: {color_name}, Opponent: {opponent_name}")
 
     def handle_opponent_move_result(self, captured_my_piece: bool, capture_square: Optional[Square]):
         self.turn_num += 1
@@ -128,6 +128,22 @@ class ImprovedBot(Player):
             probs = [count / total for count in piece_counts.values()]
             return -sum(p * math.log2(p) for p in probs if p > 0)
         
+        def sense_window_entropy(center_square: Square) -> float:
+            """Compute entropy for entire 3x3 sensing window."""
+            center_rank, center_file = divmod(center_square, 8)
+            total_entropy = 0.0
+            squares_in_window = 0
+            
+            for dr in [-1, 0, 1]:
+                for df in [-1, 0, 1]:
+                    rank, file = center_rank + dr, center_file + df
+                    if 0 <= rank < 8 and 0 <= file < 8:
+                        square = rank * 8 + file
+                        total_entropy += square_entropy(square)
+                        squares_in_window += 1
+            
+            return total_entropy / squares_in_window if squares_in_window > 0 else 0.0
+
         def get_strategic_zones() -> Dict[str, Set[Square]]:
             """Define strategic zones on the board."""
             return {
@@ -162,7 +178,7 @@ class ImprovedBot(Player):
                 board = chess.Board(board_str)
                 piece = board.piece_at(square)
                 
-                if piece and piece.color != board.turn:  # Enemy piece
+                if piece and piece.color != self.color:  # Enemy piece
                     # High value pieces are more threatening
                     piece_values = {
                         chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
@@ -186,7 +202,7 @@ class ImprovedBot(Player):
 
         def compute_weighted_score(square: Square) -> float:
             """Compute weighted score combining entropy and strategic factors."""
-            entropy = square_entropy(square)
+            entropy = sense_window_entropy(square)
             
             # Base weight is entropy
             score = entropy

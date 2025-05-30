@@ -2,13 +2,10 @@
 
 # List of all bots
 bots=(
-  "./src/improvedbot.py"
-  "./src/improvedbot3.py"
-  "./src/improvedbot4.py"
-  "./src/improvedbot5.py"
   "./src/random_sensing_bot.py"
   "./src/troutbot.py"
   "reconchess.bots.random_bot"
+  "./src/improvedbot.py"
 )
 
 # Run each match in both directions (White vs Black and vice versa)
